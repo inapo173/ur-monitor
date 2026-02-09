@@ -12,7 +12,6 @@ import sys
 # ==========================================
 
 # 監視したい物件のURLリスト
-# ※ 末尾を "_room.html" に統一済み
 TARGET_URLS = [
     # 福住一丁目
     "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_2660_room.html",
@@ -54,16 +53,18 @@ TARGET_URLS = [
     "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_5840_room.html",
     # 葛西クリーンタウン清新プラザ
     "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_3480_room.html",
-    # 川口芝園団地（修正済み）
+    # 川口芝園団地
     "https://www.ur-net.go.jp/chintai/kanto/saitama/50_1820_room.html",
-    # アーバンライフ西新井（修正済み）
+    # アーバンライフ西新井
     "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_5320_room.html",
-    #テスト
+    
+    # === テスト用（コンフォール松原） ===
+    # ※ テストが終わったらこの下の行を消してください
     "https://www.ur-net.go.jp/chintai/kanto/saitama/50_1270_room.html"
 ]
 
-# 家賃の上限設定 (8万5000円)
-MAX_RENT_LIMIT = 85000 
+# ★★★ テストが終わったら 85000 に戻してください ★★★
+MAX_RENT_LIMIT = 85000
 
 # GitHub Secretsから読み込む
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
@@ -75,7 +76,6 @@ HEALTHCHECK_URL = os.environ.get("HEALTHCHECK_URL", "")
 
 def send_discord(message):
     if not DISCORD_WEBHOOK_URL:
-        # ここでログに警告を出す
         print("⚠ 【重要】Discord URLが設定されていません。Secretsの名前が 'DISCORD_WEBHOOK_URL' か確認してください。")
         return
     try:
@@ -90,23 +90,33 @@ def extract_room_details(soup):
     rooms = []
     rows = soup.find_all("tr")
     
+    # デバッグ: 行が見つかったかログに出す（多すぎるのでコメントアウト推奨だが調査用に）
+    # print(f"DEBUG: Found {len(rows)} rows")
+
     for row in rows:
         text = row.get_text()
+        # 全角スペースや改行を半角スペース1つに統一
         text = re.sub(r'\s+', ' ', text).strip()
         
-        # 厳密なチェック：家賃だけでなく、階数や広さの情報も同じ行にあるか確認
-        rent_match = re.search(r'([0-9,]+)円', text)
-        size_match = re.search(r'([0-9]+)㎡|([0-9]+)m2', text)
-        floor_match = re.search(r'([0-9]+)階', text)
-        type_match = re.search(r'[1-4][LDKS]+', text)
+        # 【改善】正規表現を柔軟にする（間にスペースがあってもOKにする）
+        # 例: "43,000円" も "43,000 円" も拾えるようにする
+        rent_match = re.search(r'([0-9,]+)\s?円', text)
+        size_match = re.search(r'([0-9]+)\s?(㎡|m2)', text) # ㎡の文字化け対策
+        floor_match = re.search(r'([0-9]+)\s?階', text)
+        type_match = re.search(r'[1-4]?[LDKSR]+', text) # 1Rや1Kも拾えるように修正
 
-        if rent_match and size_match and floor_match:
+        if rent_match:
             rent_str = rent_match.group(1).replace(",", "")
-            rent = int(rent_str)
+            try:
+                rent = int(rent_str)
+            except:
+                continue
             
+            # 家賃フィルター（家賃だけは絶対条件）
             if rent > MAX_RENT_LIMIT:
                 continue
-                
+            
+            # 広さや階数がうまく取れなくても、家賃がクリアなら一旦通知対象にする（安全策）
             room_info = {
                 "rent_fmt": rent_match.group(0),
                 "size": size_match.group(0) if size_match else "不明",
@@ -114,6 +124,7 @@ def extract_room_details(soup):
                 "type": type_match.group(0) if type_match else "-"
             }
             rooms.append(room_info)
+
     return rooms
 
 def check_vacancy(url):
@@ -125,9 +136,11 @@ def check_vacancy(url):
     
     try:
         response = requests.get(url, headers=headers, timeout=30)
-        response.encoding = response.apparent_encoding
         
-        # 満室画面（掲載終了）の検知
+        # 【重要】文字化け対策：強制的にUTF-8とみなす（URサイトはUTF-8のため）
+        response.encoding = 'utf-8'
+        
+        # 満室画面の検知
         if "掲載は終了いたしました" in response.text or "お探しのページは見つかりません" in response.text:
             print(f"→ 満室 (掲載終了画面): {url}")
             return False
@@ -135,7 +148,6 @@ def check_vacancy(url):
         if response.status_code != 200:
             error_msg = f"⚠ **アクセス・エラー発生**\nCode: {response.status_code}\nURL: {url}"
             print(error_msg)
-            # 404/403エラーなら通知する
             if response.status_code in [403, 404, 500, 502, 503]:
                 send_discord(error_msg)
             return False
@@ -149,8 +161,7 @@ def check_vacancy(url):
 
         rooms = extract_room_details(soup)
         if not rooms:
-            # 誤検知防止のため、ログメッセージを控えめに
-            print(f"→ 条件に合う空き部屋なし: {url}")
+            print(f"→ 条件に合う空き部屋なし（または解析失敗）: {url}")
             return False
 
         title = soup.find("h1")
@@ -177,13 +188,12 @@ def check_vacancy(url):
 if __name__ == "__main__":
     print("--- 監視ジョブ開始 ---")
     
-    # Discord設定チェック
     if DISCORD_WEBHOOK_URL:
         print("✅ Discord設定: OK")
     else:
-        print("❌ Discord設定: 未設定（通知は届きません）Secretsを確認してください！")
+        print("❌ Discord設定: 未設定")
 
-    wait_time = random.randint(5, 20)
+    wait_time = random.randint(5, 15)
     print(f"Wait for {wait_time} sec...")
     time.sleep(wait_time)
     
