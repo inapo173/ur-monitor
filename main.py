@@ -13,42 +13,56 @@ import sys
 
 # 監視したい物件のURLリスト
 TARGET_URLS = [
-    # リバーシティ21
-    "https://www.ur-net.go.jp/chintai/kanto/tokyo/23ku/detail/id1_1970.html",
-    # 本郷真砂アーバンハイツ
-    "https://www.ur-net.go.jp/chintai/kanto/tokyo/23ku/detail/id1_1049.html",
-    # コンフォール清澄白河
-    "https://www.ur-net.go.jp/chintai/kanto/tokyo/23ku/detail/id1_2991.html",
-    # 南砂住宅
-    "https://www.ur-net.go.jp/chintai/kanto/tokyo/23ku/detail/id1_1330.html",
-    # シティコート大島
-    "https://www.ur-net.go.jp/chintai/kanto/tokyo/23ku/detail/id1_3660.html",
-    # ハートアイランド新田
-    "https://www.ur-net.go.jp/chintai/kanto/tokyo/23ku/detail/id1_4090.html",
-    # 葛西クリーンタウン
-    "https://www.ur-net.go.jp/chintai/kanto/tokyo/23ku/detail/id1_1670.html",
-    # パークタウン足立保木間
-    "https://www.ur-net.go.jp/chintai/kanto/tokyo/23ku/detail/id1_1660.html",
+    # 福住1丁目
+    "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_2660.html",
+    # 木場公園三好住宅
+    "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_3450.html",
+    # 木場公園平野住宅
+    "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_3570.html"
+    # 木場三丁目パークハイツ
+    "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_3860.html"
+    # 大島六丁目
+    "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_1920.html?msockid=35fd59cd3845616b17044c4839406036"
+    # アーバンライフ西新井
+    "https://www.ur-net.go.jp/chintai/kanto/tokyo/area/121.html?msockid=35fd59cd3845616b17044c4839406036",
     # 高島平団地
-    "https://www.ur-net.go.jp/chintai/kanto/tokyo/23ku/detail/id1_0680.html",
-    # 浦安マリナイースト21
-    "https://www.ur-net.go.jp/chintai/kanto/chiba/detail/id1_4870.html",
-    # 見明川団地
-    "https://www.ur-net.go.jp/chintai/kanto/chiba/detail/id1_1890.html",
-    # 行徳・妙典エリア（駅検索結果）
-    "https://www.ur-net.go.jp/chintai/kanto/chiba/list/?td=&p=&w=&st=1228020,1228030,1228040&t=1&t=2&t=3&t=4&r=20",
+    "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_2250.html?msockid=35fd59cd3845616b17044c4839406036",
     # 川口芝園団地
-    "https://www.ur-net.go.jp/chintai/kanto/saitama/detail/id1_1250.html",
+    "https://www.ur-net.go.jp/chintai/kanto/saitama/50_1820.html?msockid=35fd59cd3845616b17044c4839406036",
     # コンフォール和光西大和
-    "https://www.ur-net.go.jp/chintai/kanto/saitama/detail/id1_3080.html",
-    # かなーちえ（川崎駅周辺検索結果）
-    "https://www.ur-net.go.jp/chintai/kanto/kanagawa/list/?td=&p=&w=&st=1401140&t=1&t=2&t=3&t=4&r=20",
-    # 横浜ポートサイド
-    "https://www.ur-net.go.jp/chintai/kanto/kanagawa/detail/id1_3090.html",
+    "https://www.ur-net.go.jp/chintai/kanto/saitama/50_4120.html?msockid=35fd59cd3845616b17044c4839406036",
+    # 志村一丁目
+    "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_1190.html"
+    # 大井六丁目
+    "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_1830.html"
+    # 南千住七丁目ハイツ
+    https://www.ur-net.go.jp/chintai/kanto/tokyo/20_4290.html"
+    # 上馬二丁目
+    "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_2400.html"
+    # 小島町二丁目
+    "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_2540.html"
+    # 東四ツ木二丁目
+    "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_2640.html"
+    # 大谷田一丁目
+    "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_2810.html"
+    #北砂五丁目
+    "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_2820.html"
+    # 北砂七丁目
+    "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_2940.html"
+    #神田小川町ハイツ
+    "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_3820.html"
+    # 新蓮根
+    "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_4760.html"
+    # アクシス東四ツ木
+    "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_5840.html"
+    # 葛西クリーンタウン清新プラザ
+    "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_3480.html"
+    # 木場公園平野住宅
+    "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_3570.html"    
 ]
 
 # 家賃の上限設定
-MAX_RENT_LIMIT = 130000 
+MAX_RENT_LIMIT = 85000 
 
 # GitHub Secretsから読み込む
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
@@ -107,12 +121,24 @@ def check_vacancy(url):
         response = requests.get(url, headers=headers, timeout=30)
         response.encoding = response.apparent_encoding
         
+        # === 修正ポイント：エラーなら正直に報告する ===
         if response.status_code != 200:
-            print(f"アクセス失敗 ({response.status_code}): {url}")
+            error_msg = f"⚠ **アクセス・エラー発生**\nCode: {response.status_code}\nURL: {url}"
+            print(error_msg)
+            # 404（存在しない）や 403（拒否）の場合はDiscordにも通知する
+            if response.status_code in [403, 404, 500, 502, 503]:
+                send_discord(error_msg)
             return False
+        # ==========================================
 
         soup = BeautifulSoup(response.text, "html.parser")
         page_text = soup.get_text()
+        
+        # メンテナンス画面やエラーページを検知
+        if "メンテナンス" in page_text or "お探しのページは見つかりません" in page_text:
+             send_discord(f"⚠ **ページ無効**\nURL切れの可能性があります\n{url}")
+             return False
+
         if "条件に一致する物件はありませんでした" in page_text or "現在、空き室はありません" in page_text:
             print("→ 空きなし")
             return False
@@ -136,7 +162,9 @@ def check_vacancy(url):
         return True
 
     except Exception as e:
-        print(f"エラー発生 ({url}): {e}")
+        # プログラム自体のエラーも通知
+        print(f"致命的エラー ({url}): {e}")
+        send_discord(f"⚠ **スクリプト・エラー**\n処理中に例外が発生しました\n{e}\nURL: {url}")
         return False
 
 # ==========================================
