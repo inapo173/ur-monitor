@@ -54,9 +54,11 @@ TARGET_URLS = [
     "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_5840_room.html",
     # 葛西クリーンタウン清新プラザ
     "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_3480_room.html",
-    
-    # === テスト用（コンフォール松原） ===
-    # ※ テストが終わったらこの下の行を消してください
+    # 川口芝園団地（修正済み）
+    "https://www.ur-net.go.jp/chintai/kanto/saitama/50_1820_room.html",
+    # アーバンライフ西新井（修正済み）
+    "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_5320_room.html",
+    #テスト
     "https://www.ur-net.go.jp/chintai/kanto/saitama/50_1270_room.html"
 ]
 
@@ -92,7 +94,7 @@ def extract_room_details(soup):
         text = row.get_text()
         text = re.sub(r'\s+', ' ', text).strip()
         
-        # 厳密なチェック：家賃・広さ・階数が揃っている行だけ抽出
+        # 厳密なチェック：家賃だけでなく、階数や広さの情報も同じ行にあるか確認
         rent_match = re.search(r'([0-9,]+)円', text)
         size_match = re.search(r'([0-9]+)㎡|([0-9]+)m2', text)
         floor_match = re.search(r'([0-9]+)階', text)
@@ -145,4 +147,66 @@ def check_vacancy(url):
             print(f"→ 空きなし: {url}")
             return False
 
-        rooms = extract
+        rooms = extract_room_details(soup)
+        if not rooms:
+            # 誤検知防止のため、ログメッセージを控えめに
+            print(f"→ 条件に合う空き部屋なし: {url}")
+            return False
+
+        title = soup.find("h1")
+        area_name = title.get_text(strip=True) if title else "不明な団地"
+        
+        msg = f"**【UR空室発見！】**\nTarget: {area_name}\nURL: {url}\n\n"
+        for i, room in enumerate(rooms):
+            if i >= 5:
+                msg += "ほか複数件あり...\n"
+                break
+            msg += f"・{room['type']} | {room['floor']} | {room['size']} | **{room['rent_fmt']}**\n"
+        
+        send_discord(msg)
+        return True
+
+    except Exception as e:
+        print(f"例外発生 ({url}): {e}")
+        send_discord(f"⚠ **スクリプト・エラー**\n{e}\nURL: {url}")
+        return False
+
+# ==========================================
+# 3. メイン実行ブロック
+# ==========================================
+if __name__ == "__main__":
+    print("--- 監視ジョブ開始 ---")
+    
+    # Discord設定チェック
+    if DISCORD_WEBHOOK_URL:
+        print("✅ Discord設定: OK")
+    else:
+        print("❌ Discord設定: 未設定（通知は届きません）Secretsを確認してください！")
+
+    wait_time = random.randint(5, 20)
+    print(f"Wait for {wait_time} sec...")
+    time.sleep(wait_time)
+    
+    found_any_in_this_run = False
+    
+    for url in TARGET_URLS:
+        if not url: continue
+        is_found = check_vacancy(url)
+        if is_found:
+            found_any_in_this_run = True
+        time.sleep(2)
+
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    if now_utc.hour == 14 and now_utc.minute >= 25:
+        if not found_any_in_this_run:
+            summary_msg = "🏁 **【本日の監視終了】**\n23:30の定時連絡です。\n本日は条件に合う空き物件はありませんでした。\nまた明日8:00から監視を再開します。"
+            send_discord(summary_msg)
+
+    if HEALTHCHECK_URL:
+        try:
+            requests.get(HEALTHCHECK_URL, timeout=10)
+            print("Healthchecks Ping送信完了")
+        except:
+            pass
+            
+    print("--- 監視ジョブ終了 ---")
