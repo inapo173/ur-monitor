@@ -52,7 +52,9 @@ TARGET_URLS = [
     # アクシス東四ツ木
     "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_5840_room.html",
     # 葛西クリーンタウン清新プラザ
-    "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_3480_room.html"
+    "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_3480_room.html",
+    #テスト
+    "https://www.ur-net.go.jp/chintai/kanto/saitama/50_1270.html"
 ]
 
 # 家賃の上限設定 (8万5000円)
