@@ -24,7 +24,7 @@ TARGET_URLS = [
     "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_3860_room.html",
     # 大島六丁目
     "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_1920_room.html",
-    # アーバンライフ西新井（ID推測: 1210）
+    # アーバンライフ西新井
     "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_1210_room.html",
     # 高島平団地
     "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_2250_room.html",
