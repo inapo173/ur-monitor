@@ -62,7 +62,7 @@ TARGET_URLS = [
     "https://www.ur-net.go.jp/chintai/kanto/saitama/50_1270.html"
 ]
 
-# ★★★ テスト用：30万円に設定中（通知が来たら 85000 に戻してください） ★★★
+# ★★★ テスト中（30万） ★★★ 通知が来たら 85000 に戻してください
 MAX_RENT_LIMIT = 300000
 
 # GitHub Secretsから読み込む
@@ -75,7 +75,7 @@ HEALTHCHECK_URL = os.environ.get("HEALTHCHECK_URL", "")
 
 def send_discord(message):
     if not DISCORD_WEBHOOK_URL:
-        print("⚠ 【重要】Discord URLが設定されていません。Secretsの名前が 'DISCORD_WEBHOOK_URL' か確認してください。")
+        print("⚠ 【重要】Discord URLが設定されていません。")
         return
     try:
         if len(message) > 1900:
@@ -93,23 +93,29 @@ def extract_room_details(soup):
         text = row.get_text()
         text = re.sub(r'\s+', ' ', text).strip()
 
-        # 【重要修正】上部の「家賃目安（〜）」を無視するロジック
-        if "〜" in text:
-            # 「39,000円〜61,500円」のような範囲表記が含まれていたら、それは部屋ではないので無視
+        # --- 判定ロジックの改善 ---
+        
+        # 1. まず「円」が含まれていない行は、家賃情報ではないので無視
+        if "円" not in text:
             continue
 
-        # 【重要修正】「号室」が含まれているかチェック
-        # 本物の空室リストには必ず「〇〇号室」や「号棟」が含まれる
-        if "号室" not in text:
+        # 2. 家賃の「幅（〜）」がある行は、「全体の目安」なので無視
+        if "〜" in text or "~" in text:
             continue
+            
+        # 3. 本物の部屋リストなら、必ず「号室」または「号棟」が入っているはず
+        # これがない行（例：共益費の説明など）は無視
+        if "号室" not in text and "号棟" not in text:
+            continue
+
+        # ここまで来れば「本物の空室行」の可能性が高い
         
-        # 緩めの正規表現で数値を拾う
         rent_match = re.search(r'([0-9,]+)\s?円', text)
         size_match = re.search(r'([0-9]+)\s?(㎡|m2)', text) 
         floor_match = re.search(r'([0-9]+)\s?階', text)
-        type_match = re.search(r'[0-9]?[LDKSR]+', text) 
-
-        # 部屋番号も取得して通知に含める（例：1-35号棟405号室）
+        type_match = re.search(r'[0-9]?[LDKSR]+', text)
+        
+        # 部屋番号の抽出（例：1号棟203号室）
         room_num_match = re.search(r'([0-9\-]+号棟[0-9]+号室|[0-9]+号室)', text)
         room_number = room_num_match.group(1) if room_num_match else "部屋番号不明"
 
@@ -125,7 +131,7 @@ def extract_room_details(soup):
                 continue
             
             room_info = {
-                "number": room_number, # 部屋番号を追加
+                "number": room_number,
                 "rent_fmt": rent_match.group(0),
                 "size": size_match.group(0) if size_match else "不明",
                 "floor": floor_match.group(0) if floor_match else "不明",
@@ -146,11 +152,10 @@ def check_vacancy(url):
     }
     
     try:
-        # print(f"Checking URL: {url}")
         response = requests.get(url, headers=headers, timeout=30)
-        response.encoding = 'utf-8' # 文字化け対策
+        response.encoding = 'utf-8'
         
-        # 満室画面の検知
+        # 1. ページ自体の消失チェック
         if "掲載は終了いたしました" in response.text or "お探しのページは見つかりません" in response.text:
             print(f"→ 満室 (掲載終了画面): {url}")
             return False
@@ -165,14 +170,26 @@ def check_vacancy(url):
         soup = BeautifulSoup(response.text, "html.parser")
         page_text = soup.get_text()
         
-        # 空きなしキーワード
-        if "条件に一致する物件はありませんでした" in page_text or "現在、空き室はありません" in page_text:
-            print(f"→ 空きなし: {url}")
-            return False
+        # 2. 【重要】テーブルを見る前に、ページ内の「空きなしメッセージ」を確認する
+        # これがあれば、そもそも部屋リストを探す必要がない（＝解析失敗エラーを出さない）
+        no_vacancy_keywords = [
+            "条件に一致する物件はありませんでした",
+            "現在、空き室はありません",
+            "ご希望の物件はありませんでした"
+        ]
+        
+        for keyword in no_vacancy_keywords:
+            if keyword in page_text:
+                print(f"→ 空きなし（{keyword}）: {url}")
+                return False
 
+        # 3. 空きがあるはずなので、詳細データを抽出する
         rooms = extract_room_details(soup)
+        
         if not rooms:
-            print(f"→ 条件に合う空き部屋なし（または解析失敗）: {url}")
+            # ここに来るのは「空きなしメッセージ」もないのに、部屋も拾えなかった場合だけ
+            # 多くの場合は「予算オーバー」か「本当に解析失敗」
+            print(f"→ データ抽出なし（予算オーバーまたは解析不可）: {url}")
             return False
 
         title = soup.find("h1")
@@ -183,7 +200,6 @@ def check_vacancy(url):
             if i >= 5:
                 msg += "ほか複数件あり...\n"
                 break
-            # メッセージに部屋番号（number）を追加
             msg += f"・{room['number']} | {room['type']} | {room['floor']} | **{room['rent_fmt']}**\n"
         
         send_discord(msg)
