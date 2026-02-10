@@ -92,12 +92,26 @@ def extract_room_details(soup):
     for row in rows:
         text = row.get_text()
         text = re.sub(r'\s+', ' ', text).strip()
+
+        # 【重要修正】上部の「家賃目安（〜）」を無視するロジック
+        if "〜" in text:
+            # 「39,000円〜61,500円」のような範囲表記が含まれていたら、それは部屋ではないので無視
+            continue
+
+        # 【重要修正】「号室」が含まれているかチェック
+        # 本物の空室リストには必ず「〇〇号室」や「号棟」が含まれる
+        if "号室" not in text:
+            continue
         
-        # 緩めの正規表現で数値を拾う（スペースがあってもOK）
+        # 緩めの正規表現で数値を拾う
         rent_match = re.search(r'([0-9,]+)\s?円', text)
         size_match = re.search(r'([0-9]+)\s?(㎡|m2)', text) 
         floor_match = re.search(r'([0-9]+)\s?階', text)
         type_match = re.search(r'[0-9]?[LDKSR]+', text) 
+
+        # 部屋番号も取得して通知に含める（例：1-35号棟405号室）
+        room_num_match = re.search(r'([0-9\-]+号棟[0-9]+号室|[0-9]+号室)', text)
+        room_number = room_num_match.group(1) if room_num_match else "部屋番号不明"
 
         if rent_match:
             rent_str = rent_match.group(1).replace(",", "")
@@ -111,6 +125,7 @@ def extract_room_details(soup):
                 continue
             
             room_info = {
+                "number": room_number, # 部屋番号を追加
                 "rent_fmt": rent_match.group(0),
                 "size": size_match.group(0) if size_match else "不明",
                 "floor": floor_match.group(0) if floor_match else "不明",
@@ -168,7 +183,8 @@ def check_vacancy(url):
             if i >= 5:
                 msg += "ほか複数件あり...\n"
                 break
-            msg += f"・{room['type']} | {room['floor']} | {room['size']} | **{room['rent_fmt']}**\n"
+            # メッセージに部屋番号（number）を追加
+            msg += f"・{room['number']} | {room['type']} | {room['floor']} | **{room['rent_fmt']}**\n"
         
         send_discord(msg)
         return True
