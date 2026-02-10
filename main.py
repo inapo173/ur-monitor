@@ -85,59 +85,56 @@ def send_discord(message):
     except Exception as e:
         print(f"送信エラー: {e}")
 
-def extract_room_details(soup):
+def extract_room_details_text_mode(text_content):
+    """
+    HTMLタグ構造に依存せず、テキスト行から情報を抽出する強力なモード
+    """
     rooms = []
-    rows = soup.find_all("tr")
+    # 改行で区切って1行ずつチェック
+    lines = text_content.split('\n')
     
-    for row in rows:
-        text = row.get_text()
-        text = re.sub(r'\s+', ' ', text).strip()
-
-        # 【重要】文字化け対策のため、漢字チェックは最小限かつ柔軟にする
+    # 情報保持用
+    current_room = {}
+    
+    for line in lines:
+        line = line.strip()
+        if not line: continue
         
-        # 1. 家賃の「幅（〜）」がある行は無視
-        # 文字化けしても大丈夫なように、複数のパターンでチェック
-        if "〜" in text or "～" in text or "range" in text:
-            continue
-            
-        # 2. 明らかに「部屋番号」を含まない行は無視
-        # 「号室」または「号棟」または「床面積」などのキーワードで部屋行と判断
-        if "号室" not in text and "号棟" not in text and "階" not in text:
+        # 1行の中に「家賃」と「広さ」と「階数」が混ざっているパターン（テーブル行のテキスト化）を想定
+        
+        # 家賃の範囲表記（〜）がある行は無視
+        if "〜" in line or "～" in line or "range" in line:
             continue
 
         # 正規表現で情報を抜く
-        rent_match = re.search(r'([0-9,]+)\s?円', text)
-        size_match = re.search(r'([0-9]+)\s?(㎡|m2)', text) 
-        floor_match = re.search(r'([0-9]+)\s?階', text)
-        type_match = re.search(r'[0-9]?[LDKSR]+', text)
-        
-        # 部屋番号（号室）を頑張って探す
-        room_num_match = re.search(r'([0-9\-]+号棟[0-9]+号室|[0-9]+号室)', text)
-        
-        # 家賃が見つからない行はスキップ
-        if not rent_match:
-            continue
+        rent_match = re.search(r'([0-9,]+)\s?円', line)
+        size_match = re.search(r'([0-9]+)\s?(㎡|m2)', line) 
+        floor_match = re.search(r'([0-9]+)\s?階', line)
+        type_match = re.search(r'[0-9]?[LDKSR]+', line)
+        room_num_match = re.search(r'([0-9\-]+号棟[0-9]+号室|[0-9]+号室)', line)
 
-        room_number = room_num_match.group(1) if room_num_match else "番号不明"
-        
-        rent_str = rent_match.group(1).replace(",", "")
-        try:
-            rent = int(rent_str)
-        except:
-            continue
-        
-        # 家賃フィルター
-        if rent > MAX_RENT_LIMIT:
-            continue
-        
-        room_info = {
-            "number": room_number,
-            "rent_fmt": rent_match.group(0),
-            "size": size_match.group(0) if size_match else "不明",
-            "floor": floor_match.group(0) if floor_match else "不明",
-            "type": type_match.group(0) if type_match else "-"
-        }
-        rooms.append(room_info)
+        # 判定基準：家賃と広さが同じ行（または近いブロック）にあれば部屋とみなす
+        if rent_match and (size_match or room_num_match):
+            rent_str = rent_match.group(1).replace(",", "")
+            try:
+                rent = int(rent_str)
+            except:
+                continue
+            
+            if rent > MAX_RENT_LIMIT:
+                continue
+                
+            # 部屋番号があれば取得、なければ「不明」
+            room_number = room_num_match.group(1) if room_num_match else "番号不明"
+            
+            room_info = {
+                "number": room_number,
+                "rent_fmt": rent_match.group(0),
+                "size": size_match.group(0) if size_match else "不明",
+                "floor": floor_match.group(0) if floor_match else "不明",
+                "type": type_match.group(0) if type_match else "-"
+            }
+            rooms.append(room_info)
 
     return rooms
 
@@ -154,13 +151,12 @@ def check_vacancy(url):
     try:
         response = requests.get(url, headers=headers, timeout=30)
         
-        # 【最重要修正】文字コードを決め打ちせず、BeautifulSoupに生のデータを渡して自動判定させる
-        # これで文字化けによる「号室」見落としを防ぐ
-        soup = BeautifulSoup(response.content, "html.parser")
-        
+        # 自動判定に任せるが、失敗時はUTF-8を試す
+        if response.encoding is None or response.encoding == 'ISO-8859-1':
+            response.encoding = 'utf-8'
+
         # 1. ページ自体の消失チェック
-        page_text = soup.get_text()
-        if "掲載は終了いたしました" in page_text or "お探しのページは見つかりません" in page_text:
+        if "掲載は終了いたしました" in response.text or "お探しのページは見つかりません" in response.text:
             print(f"→ 満室 (掲載終了画面): {url}")
             return False
 
@@ -171,6 +167,10 @@ def check_vacancy(url):
                 send_discord(error_msg)
             return False
 
+        # BeautifulSoupでテキストのみを抽出（タグを除去）
+        soup = BeautifulSoup(response.content, "html.parser")
+        page_text_clean = soup.get_text("\n") # タグの代わりに改行を入れる
+
         # 2. 空きなしキーワードチェック
         no_vacancy_keywords = [
             "条件に一致する物件はありませんでした",
@@ -179,15 +179,19 @@ def check_vacancy(url):
         ]
         
         for keyword in no_vacancy_keywords:
-            if keyword in page_text:
+            if keyword in page_text_clean:
                 print(f"→ 空きなし（{keyword}）: {url}")
                 return False
 
-        # 3. データ抽出
-        rooms = extract_room_details(soup)
+        # 3. テキストスキャンモードで抽出
+        rooms = extract_room_details_text_mode(page_text_clean)
         
         if not rooms:
-            print(f"→ データ抽出なし（予算オーバーまたは解析不可）: {url}")
+            # 念のため、生のHTMLからJSONっぽいデータがないかもチェック（簡易）
+            if "43,000" in response.text: # デバッグ用：テスト物件の家賃があるか確認
+                 print(f"⚠ 警告: ページ内に家賃(43,000)は見つかるが抽出できていません。形式が変わった可能性があります。: {url}")
+            else:
+                 print(f"→ データ抽出なし（予算オーバーまたは解析不可/JS必須の可能性）: {url}")
             return False
 
         title = soup.find("h1")
