@@ -93,51 +93,51 @@ def extract_room_details(soup):
         text = row.get_text()
         text = re.sub(r'\s+', ' ', text).strip()
 
-        # --- 判定ロジックの改善 ---
+        # 【重要】文字化け対策のため、漢字チェックは最小限かつ柔軟にする
         
-        # 1. まず「円」が含まれていない行は、家賃情報ではないので無視
-        if "円" not in text:
-            continue
-
-        # 2. 家賃の「幅（〜）」がある行は、「全体の目安」なので無視
-        if "〜" in text or "~" in text:
+        # 1. 家賃の「幅（〜）」がある行は無視
+        # 文字化けしても大丈夫なように、複数のパターンでチェック
+        if "〜" in text or "～" in text or "range" in text:
             continue
             
-        # 3. 本物の部屋リストなら、必ず「号室」または「号棟」が入っているはず
-        # これがない行（例：共益費の説明など）は無視
-        if "号室" not in text and "号棟" not in text:
+        # 2. 明らかに「部屋番号」を含まない行は無視
+        # 「号室」または「号棟」または「床面積」などのキーワードで部屋行と判断
+        if "号室" not in text and "号棟" not in text and "階" not in text:
             continue
 
-        # ここまで来れば「本物の空室行」の可能性が高い
-        
+        # 正規表現で情報を抜く
         rent_match = re.search(r'([0-9,]+)\s?円', text)
         size_match = re.search(r'([0-9]+)\s?(㎡|m2)', text) 
         floor_match = re.search(r'([0-9]+)\s?階', text)
         type_match = re.search(r'[0-9]?[LDKSR]+', text)
         
-        # 部屋番号の抽出（例：1号棟203号室）
+        # 部屋番号（号室）を頑張って探す
         room_num_match = re.search(r'([0-9\-]+号棟[0-9]+号室|[0-9]+号室)', text)
-        room_number = room_num_match.group(1) if room_num_match else "部屋番号不明"
+        
+        # 家賃が見つからない行はスキップ
+        if not rent_match:
+            continue
 
-        if rent_match:
-            rent_str = rent_match.group(1).replace(",", "")
-            try:
-                rent = int(rent_str)
-            except:
-                continue
-            
-            # 家賃フィルター
-            if rent > MAX_RENT_LIMIT:
-                continue
-            
-            room_info = {
-                "number": room_number,
-                "rent_fmt": rent_match.group(0),
-                "size": size_match.group(0) if size_match else "不明",
-                "floor": floor_match.group(0) if floor_match else "不明",
-                "type": type_match.group(0) if type_match else "-"
-            }
-            rooms.append(room_info)
+        room_number = room_num_match.group(1) if room_num_match else "番号不明"
+        
+        rent_str = rent_match.group(1).replace(",", "")
+        try:
+            rent = int(rent_str)
+        except:
+            continue
+        
+        # 家賃フィルター
+        if rent > MAX_RENT_LIMIT:
+            continue
+        
+        room_info = {
+            "number": room_number,
+            "rent_fmt": rent_match.group(0),
+            "size": size_match.group(0) if size_match else "不明",
+            "floor": floor_match.group(0) if floor_match else "不明",
+            "type": type_match.group(0) if type_match else "-"
+        }
+        rooms.append(room_info)
 
     return rooms
 
@@ -153,10 +153,14 @@ def check_vacancy(url):
     
     try:
         response = requests.get(url, headers=headers, timeout=30)
-        response.encoding = 'utf-8'
+        
+        # 【最重要修正】文字コードを決め打ちせず、BeautifulSoupに生のデータを渡して自動判定させる
+        # これで文字化けによる「号室」見落としを防ぐ
+        soup = BeautifulSoup(response.content, "html.parser")
         
         # 1. ページ自体の消失チェック
-        if "掲載は終了いたしました" in response.text or "お探しのページは見つかりません" in response.text:
+        page_text = soup.get_text()
+        if "掲載は終了いたしました" in page_text or "お探しのページは見つかりません" in page_text:
             print(f"→ 満室 (掲載終了画面): {url}")
             return False
 
@@ -167,11 +171,7 @@ def check_vacancy(url):
                 send_discord(error_msg)
             return False
 
-        soup = BeautifulSoup(response.text, "html.parser")
-        page_text = soup.get_text()
-        
-        # 2. 【重要】テーブルを見る前に、ページ内の「空きなしメッセージ」を確認する
-        # これがあれば、そもそも部屋リストを探す必要がない（＝解析失敗エラーを出さない）
+        # 2. 空きなしキーワードチェック
         no_vacancy_keywords = [
             "条件に一致する物件はありませんでした",
             "現在、空き室はありません",
@@ -183,12 +183,10 @@ def check_vacancy(url):
                 print(f"→ 空きなし（{keyword}）: {url}")
                 return False
 
-        # 3. 空きがあるはずなので、詳細データを抽出する
+        # 3. データ抽出
         rooms = extract_room_details(soup)
         
         if not rooms:
-            # ここに来るのは「空きなしメッセージ」もないのに、部屋も拾えなかった場合だけ
-            # 多くの場合は「予算オーバー」か「本当に解析失敗」
             print(f"→ データ抽出なし（予算オーバーまたは解析不可）: {url}")
             return False
 
