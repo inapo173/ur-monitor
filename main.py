@@ -56,7 +56,7 @@ TARGET_URLS = [
     # 川口芝園団地
     "https://www.ur-net.go.jp/chintai/kanto/saitama/50_1820_room.html",
     # アーバンライフ西新井
-    "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_5320_room.html",
+    "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_5320.html",
     
     # === テスト用（コンフォール松原） ===
     # ※ テストが終わったらこの下の行を消してください
