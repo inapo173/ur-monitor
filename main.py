@@ -64,7 +64,7 @@ TARGET_URLS = [
 ]
 
 # ★★★ テスト終了後はここを 85000 に戻してください ★★★
-MAX_RENT_LIMIT = 10000
+MAX_RENT_LIMIT = 85000
 
 # GitHub Secretsから読み込む
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
