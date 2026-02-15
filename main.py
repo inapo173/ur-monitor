@@ -63,14 +63,14 @@ TARGET_URLS = [
     "https://www.ur-net.go.jp/chintai/kanto/saitama/50_1270.html"
 ]
 
-# ★★★ テスト終了後はここを 85000 に戻してください ★★★
-MAX_RENT_LIMIT = 85000
+# ★★★ テスト用：10万円（本番は85000に戻してください） ★★★
+MAX_RENT_LIMIT = 100000
 
-# GitHub Secretsから読み込む
+# Discord & Healthchecks
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 HEALTHCHECK_URL = os.environ.get("HEALTHCHECK_URL", "")
 
-# APIエンドポイント
+# URのAPIエンドポイント
 API_ENDPOINT = "https://chintai.r6.ur-net.go.jp/chintai/api/bukken/detail/detail_bukken_room/"
 
 # ==========================================
@@ -88,8 +88,9 @@ def send_discord(message):
         print(f"送信エラー: {e}")
 
 def get_identifiers(html_text):
-    """HTMLからID(shisya, danchi, shikibetu)を探す"""
-    match = re.search(r"initSearch\('(\d+)',\s*'(\d+)',\s*'(\d+)'\)", html_text)
+    """HTMLからID(shisya, danchi, shikibetu)を探す（引用符の種類に対応）"""
+    # initSearch('50', '127', '0') または initSearch("50", "127", "0") に対応
+    match = re.search(r"initSearch\(['\"](\d+)['\"],\s*['\"](\d+)['\"],\s*['\"](\d+)['\"]\)", html_text)
     if match:
         return {
             "shisya": match.group(1),
@@ -99,7 +100,7 @@ def get_identifiers(html_text):
     return None
 
 def fetch_room_data_via_api(identifiers, original_url):
-    """正しいPayloadでAPIを叩く"""
+    """APIからJSONデータを取得する"""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": original_url,
@@ -127,10 +128,10 @@ def fetch_room_data_via_api(identifiers, original_url):
         if response.status_code == 200:
             return response.json()
         else:
-            print(f"❌ APIエラー ({response.status_code}): {original_url}")
+            print(f"⚠ API応答エラー ({response.status_code}): {original_url}")
             return None
     except Exception as e:
-        print(f"❌ API通信例外: {e}")
+        print(f"⚠ API通信エラー: {e}")
         return None
 
 def check_vacancy(url):
@@ -146,35 +147,35 @@ def check_vacancy(url):
         # 1. HTML取得
         response = requests.get(url, headers=headers, timeout=30)
         
-        # 団地名を取得（ログ出力用に早めに取得）
+        # 団地名を取得
         soup = BeautifulSoup(response.content, "html.parser")
         title_tag = soup.find("h1")
-        area_name = title_tag.get_text(strip=True) if title_tag else "名称不明"
+        area_name = title_tag.get_text(strip=True) if title_tag else "団地名不明"
 
         if response.status_code == 404:
-            print(f"❌ ページ削除 (404): {area_name}")
+            print(f"☁️ 空き室なし (ページ削除): {area_name}")
             return False
         
         # 2. ID抽出
         identifiers = get_identifiers(response.text)
         if not identifiers:
-            print(f"❌ ID取得失敗 (initSearchなし): {area_name}")
+            # IDがない＝空室リストの機能自体がないページ
+            print(f"☁️ 空き室なし (リスト機能なし): {area_name}")
             return False
             
         # 3. API実行
         json_data = fetch_room_data_via_api(identifiers, url)
         
         if json_data is None:
-            # API通信エラー等の場合
-            return False
+            return False # エラーログはfetch内で出力済み
             
-        # 4. JSON解析と振り分け
-        valid_rooms = []     # 条件に合う部屋
-        skipped_count = 0    # 条件（家賃）に合わない部屋の数
-        total_api_rooms = len(json_data) # APIが返してきた全部屋数
+        # 4. JSON解析
+        valid_rooms = []
+        skipped_count = 0
+        total_rooms = len(json_data)
         
         for room in json_data:
-            # 家賃などのデータを整形
+            # データ整形
             rent_str = str(room.get("rent", "0")).replace("円", "").replace(",", "")
             room_name = room.get("name", "不明")
             room_type = room.get("type", "-")
@@ -199,10 +200,10 @@ def check_vacancy(url):
                 "floor": floor_num
             })
 
-        # --- ログ出力の分岐処理 ---
+        # --- ログ出力の分岐（ご要望のメッセージ） ---
         
         if len(valid_rooms) > 0:
-            # ケースA: 条件に合う部屋がある（通知する）
+            # 条件に合う部屋がある場合
             print(f"🎉 空室発見！ ({len(valid_rooms)}件): {area_name}")
             
             msg = f"**【UR空室発見！】**\nTarget: {area_name}\nURL: {url}\n\n"
@@ -215,18 +216,18 @@ def check_vacancy(url):
             send_discord(msg)
             return True
 
-        elif total_api_rooms > 0:
-            # ケースB: 部屋はあるけど、すべて家賃オーバー（通知しない）
-            print(f"👀 空室はあるが、条件不一致 (家賃予算外: {skipped_count}件): {area_name}")
+        elif total_rooms > 0:
+            # 部屋はあるが、家賃が高い場合
+            print(f"👀 空き室はあるが、条件不一致 (家賃オーバー {skipped_count}件): {area_name}")
             return False
             
         else:
-            # ケースC: そもそも部屋がない（通知しない）
-            print(f"☁️ 空室なし: {area_name}")
+            # 部屋が0件の場合
+            print(f"☁️ 空き室なし: {area_name}")
             return False
 
     except Exception as e:
-        print(f"❌ 例外発生 ({url}): {e}")
+        print(f"⚠ エラー発生: {area_name} ({e})")
         return False
 
 # ==========================================
@@ -240,7 +241,7 @@ if __name__ == "__main__":
     else:
         print("❌ Discord設定: 未設定")
     
-    # 連続実行時の負荷対策として少し待機
+    # 負荷分散のため少し待機
     wait_time = random.randint(2, 5)
     print(f"Wait for {wait_time} sec...")
     time.sleep(wait_time)
@@ -252,10 +253,10 @@ if __name__ == "__main__":
         is_found = check_vacancy(url)
         if is_found:
             found_any_in_this_run = True
-        time.sleep(2) # サーバー負荷軽減
+        time.sleep(2) # サーバーに優しく
 
+    # 定時連絡（毎日1回、成果がなくても通知）
     now_utc = datetime.datetime.now(datetime.timezone.utc)
-    # 日本時間 23:25〜24:25 の間であれば、成果がなくても定時報告（必要なら）
     if now_utc.hour == 14 and now_utc.minute >= 25:
         if not found_any_in_this_run:
             summary_msg = "🏁 **【本日の監視終了】**\n23:30の定時連絡です。\n本日は条件に合う空き物件はありませんでした。\nまた明日8:00から監視を再開します。"
