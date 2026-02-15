@@ -12,7 +12,8 @@ import json
 # 1. ユーザー設定エリア
 # ==========================================
 
-# 監視したい物件のURLリスト（普通の.htmlのURLでOK）
+# 監視したい物件のURLリスト
+# 普通のURL(.html)を入れておけば、自動でIDを解析して裏APIを見に行きます
 TARGET_URLS = [
     # 福住一丁目
     "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_2660.html",
@@ -59,7 +60,7 @@ TARGET_URLS = [
     # アーバンライフ西新井
     "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_5320.html",
     
-    # === テスト用物件 ===
+    # === テスト用（西上尾第二） ===
     "https://www.ur-net.go.jp/chintai/kanto/saitama/50_1270.html"
 ]
 
@@ -70,8 +71,8 @@ MAX_RENT_LIMIT = 300000
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 HEALTHCHECK_URL = os.environ.get("HEALTHCHECK_URL", "")
 
-# APIのエンドポイント（ここが情報の宝庫）
-API_ENDPOINT = "https://www.ur-net.go.jp/chintai/api/bukken/detail/detail_bukken_room/"
+# ★★★ 【重要】解析で判明した正しいAPI住所 ★★★
+API_ENDPOINT = "https://chintai.r6.ur-net.go.jp/chintai/api/bukken/detail/detail_bukken_room/"
 
 # ==========================================
 # 2. システム関数群
@@ -89,8 +90,7 @@ def send_discord(message):
 
 def get_identifiers(html_text):
     """
-    HTMLの中から、APIを叩くために必要な「3つのID」を探し出す
-    initSearch('50', '127', '0') のような記述を探す
+    HTMLの中からinitSearch('50', '127', '0')のようなIDを探し出す
     """
     match = re.search(r"initSearch\('(\d+)',\s*'(\d+)',\s*'(\d+)'\)", html_text)
     if match:
@@ -103,31 +103,41 @@ def get_identifiers(html_text):
 
 def fetch_room_data_via_api(identifiers, original_url):
     """
-    IDを使って裏APIからJSONデータを取得する
+    解析された正しい住所と合言葉でAPIを叩く
     """
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": original_url,
-        "X-Requested-With": "XMLHttpRequest",
-        "Origin": "https://www.ur-net.go.jp"
+        "Origin": "https://www.ur-net.go.jp", # ここ重要
+        "X-Requested-With": "XMLHttpRequest"   # これがないと無視されることがある
     }
     
-    # APIに送るデータ（これが「鍵」です）
+    # ★★★ 解析画像に基づいた正しいPayload ★★★
     payload = {
+        "rent_low": "",
+        "rent_high": "",
+        "floorspace_low": "",
+        "floorspace_high": "",
         "shisya": identifiers["shisya"],
         "danchi": identifiers["danchi"],
         "shikibetu": identifiers["shikibetu"],
-        "siteId": "chintai" # おそらく固定
+        "newBukkenRoom": "",
+        "orderByField": "0",
+        "orderBySort": "0",
+        "pageIndex": "0",
+        "sp": "" # スマホフラグ（PCのふりをするので空でOK）
     }
     
     try:
+        # requests.postでdataに辞書を渡すと、自動的に
+        # Content-Type: application/x-www-form-urlencoded になります（これが正解）
         response = requests.post(API_ENDPOINT, data=payload, headers=headers, timeout=30)
         
         if response.status_code == 200:
             try:
-                return response.json() # JSONとして読み込む
+                return response.json()
             except json.JSONDecodeError:
-                print(f"⚠ API応答がJSONではありませんでした: {original_url}")
+                print(f"⚠ API応答がJSONではありません: {original_url}")
                 return None
         else:
             print(f"⚠ APIアクセスエラー ({response.status_code}): {original_url}")
@@ -157,12 +167,11 @@ def check_vacancy(url):
         # ID抽出
         identifiers = get_identifiers(response.text)
         if not identifiers:
-            # IDが見つからない＝部屋データを持つページではない（または構造が変わった）
             print(f"→ ID抽出失敗（initSearchが見つかりません）: {url}")
             return False
             
-        # 2. 抽出したIDを使ってAPIを叩く
-        print(f"   (API問い合わせ中... {identifiers['shisya']}-{identifiers['danchi']}-{identifiers['shikibetu']})")
+        # 2. 抽出したIDを使って正しいAPIを叩く
+        print(f"   (API問い合わせ: {identifiers['shisya']}-{identifiers['danchi']}-{identifiers['shikibetu']})")
         json_data = fetch_room_data_via_api(identifiers, url)
         
         if not json_data:
@@ -172,27 +181,25 @@ def check_vacancy(url):
         # 3. JSONデータを解析して部屋を探す
         valid_rooms = []
         
-        # JSONはリスト形式で返ってくる [ {room1}, {room2}... ]
+        # 提供いただいたJSON構造に合わせて解析
         for room in json_data:
-            # 必要な情報を辞書から取り出す
+            # 家賃（"46,800円" -> 46800）
             rent_str = room.get("rent", "0").replace("円", "").replace(",", "")
             room_name = room.get("name", "不明")
             room_type = room.get("type", "-")
-            floor_space = room.get("floorspace", "-") # &#13217;などが含まれるかも
+            # 床面積の特殊文字 &#13217; (㎡) を変換
+            floor_space = room.get("floorspace", "-").replace("&#13217;", "㎡")
             floor_num = room.get("floor", "-")
             
             try:
                 rent = int(rent_str)
             except:
-                continue # 家賃が数値にできないデータは無視
+                continue
                 
             # 家賃フィルター
             if rent > MAX_RENT_LIMIT:
                 continue
                 
-            # HTML特殊文字のクリーニング
-            floor_space = floor_space.replace("&#13217;", "㎡")
-            
             valid_rooms.append({
                 "name": room_name,
                 "rent_fmt": room.get("rent", ""),
@@ -235,7 +242,8 @@ if __name__ == "__main__":
     else:
         print("❌ Discord設定: 未設定")
 
-    wait_time = random.randint(5, 15)
+    # テスト時は待ち時間を短く
+    wait_time = random.randint(2, 5)
     print(f"Wait for {wait_time} sec...")
     time.sleep(wait_time)
     
@@ -246,7 +254,7 @@ if __name__ == "__main__":
         is_found = check_vacancy(url)
         if is_found:
             found_any_in_this_run = True
-        time.sleep(2)
+        time.sleep(2) # 連続アクセスしすぎないよう待機
 
     now_utc = datetime.datetime.now(datetime.timezone.utc)
     if now_utc.hour == 14 and now_utc.minute >= 25:
