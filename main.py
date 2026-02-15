@@ -13,7 +13,6 @@ import json
 # ==========================================
 
 # 監視したい物件のURLリスト
-# 普通のURL(.html)を入れておけば、自動でIDを解析して裏APIを見に行きます
 TARGET_URLS = [
     # 福住一丁目
     "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_2660.html",
@@ -64,14 +63,14 @@ TARGET_URLS = [
     "https://www.ur-net.go.jp/chintai/kanto/saitama/50_1270.html"
 ]
 
-# ★★★ テスト用：30万円（成功したら85000に戻してください） ★★★
+# ★★★ テスト用：30万円（本番運用時は85000に戻してください） ★★★
 MAX_RENT_LIMIT = 300000
 
 # GitHub Secretsから読み込む
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 HEALTHCHECK_URL = os.environ.get("HEALTHCHECK_URL", "")
 
-# ★★★ 【重要】解析で判明した正しいAPI住所 ★★★
+# ★正しいAPIエンドポイント
 API_ENDPOINT = "https://chintai.r6.ur-net.go.jp/chintai/api/bukken/detail/detail_bukken_room/"
 
 # ==========================================
@@ -89,9 +88,7 @@ def send_discord(message):
         print(f"送信エラー: {e}")
 
 def get_identifiers(html_text):
-    """
-    HTMLの中からinitSearch('50', '127', '0')のようなIDを探し出す
-    """
+    """HTMLの中からID(shisya, danchi, shikibetu)を探す"""
     match = re.search(r"initSearch\('(\d+)',\s*'(\d+)',\s*'(\d+)'\)", html_text)
     if match:
         return {
@@ -103,16 +100,16 @@ def get_identifiers(html_text):
 
 def fetch_room_data_via_api(identifiers, original_url):
     """
-    解析された正しい住所と合言葉でAPIを叩く
+    提供された画像を元に、ブラウザと全く同じデータを送信する
     """
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": original_url,
-        "Origin": "https://www.ur-net.go.jp", # ここ重要
-        "X-Requested-With": "XMLHttpRequest"   # これがないと無視されることがある
+        "Origin": "https://www.ur-net.go.jp",
+        "X-Requested-With": "XMLHttpRequest"
     }
     
-    # ★★★ 解析画像に基づいた正しいPayload ★★★
+    # ★画像のPayload通りに修正しました★
     payload = {
         "rent_low": "",
         "rent_high": "",
@@ -125,26 +122,20 @@ def fetch_room_data_via_api(identifiers, original_url):
         "orderByField": "0",
         "orderBySort": "0",
         "pageIndex": "0",
-        "sp": "" # スマホフラグ（PCのふりをするので空でOK）
+        "sp": ""
     }
     
     try:
-        # requests.postでdataに辞書を渡すと、自動的に
-        # Content-Type: application/x-www-form-urlencoded になります（これが正解）
         response = requests.post(API_ENDPOINT, data=payload, headers=headers, timeout=30)
         
         if response.status_code == 200:
-            try:
-                return response.json()
-            except json.JSONDecodeError:
-                print(f"⚠ API応答がJSONではありません: {original_url}")
-                return None
+            return response.json()
         else:
-            print(f"⚠ APIアクセスエラー ({response.status_code}): {original_url}")
+            print(f"❌ APIエラー ({response.status_code}): {original_url}")
             return None
             
     except Exception as e:
-        print(f"⚠ API通信例外: {e}")
+        print(f"❌ API通信例外: {e}")
         return None
 
 def check_vacancy(url):
@@ -157,38 +148,36 @@ def check_vacancy(url):
     }
     
     try:
-        # 1. まずHTMLページにアクセスしてIDを取得する
+        # 1. HTML取得（IDを探すため）
         response = requests.get(url, headers=headers, timeout=30)
-        
         if response.status_code == 404:
-            print(f"→ ページなし (404): {url}")
+            print(f"❌ ページ削除 (404): {url}")
             return False
         
-        # ID抽出
+        # 2. ID抽出
         identifiers = get_identifiers(response.text)
         if not identifiers:
-            print(f"→ ID抽出失敗（initSearchが見つかりません）: {url}")
+            print(f"❌ ID取得失敗 (initSearchなし): {url}")
             return False
             
-        # 2. 抽出したIDを使って正しいAPIを叩く
-        print(f"   (API問い合わせ: {identifiers['shisya']}-{identifiers['danchi']}-{identifiers['shikibetu']})")
+        # 3. API実行
+        # print(f"   API問い合わせ... ({identifiers['shisya']}-{identifiers['danchi']}-{identifiers['shikibetu']})")
         json_data = fetch_room_data_via_api(identifiers, url)
         
-        if not json_data:
-            print(f"→ データ取得失敗（APIエラーまたは空）: {url}")
+        if json_data is None:
+            # APIが失敗した場合
             return False
             
-        # 3. JSONデータを解析して部屋を探す
+        # 4. JSON解析
         valid_rooms = []
         
-        # 提供いただいたJSON構造に合わせて解析
+        # JSONリストをループ処理
         for room in json_data:
-            # 家賃（"46,800円" -> 46800）
-            rent_str = room.get("rent", "0").replace("円", "").replace(",", "")
+            # 家賃などのデータを整形
+            rent_str = str(room.get("rent", "0")).replace("円", "").replace(",", "")
             room_name = room.get("name", "不明")
             room_type = room.get("type", "-")
-            # 床面積の特殊文字 &#13217; (㎡) を変換
-            floor_space = room.get("floorspace", "-").replace("&#13217;", "㎡")
+            floor_space = str(room.get("floorspace", "-")).replace("&#13217;", "㎡")
             floor_num = room.get("floor", "-")
             
             try:
@@ -208,15 +197,18 @@ def check_vacancy(url):
                 "floor": floor_num
             })
 
-        if not valid_rooms:
-            print(f"→ 条件に合う空き部屋なし（API応答あり・予算オーバーなど）: {url}")
-            return False
-
-        # 4. 通知送信
+        # 結果表示
         soup = BeautifulSoup(response.content, "html.parser")
         title = soup.find("h1")
         area_name = title.get_text(strip=True) if title else "不明な団地"
-        
+
+        if not valid_rooms:
+            print(f"👀 空きなし (条件不一致): {area_name}")
+            return False
+        else:
+            print(f"🎉 空室発見！ ({len(valid_rooms)}件): {area_name}")
+
+        # 5. 通知送信
         msg = f"**【UR空室発見！】**\nTarget: {area_name}\nURL: {url}\n\n"
         for i, r in enumerate(valid_rooms):
             if i >= 5:
@@ -228,7 +220,7 @@ def check_vacancy(url):
         return True
 
     except Exception as e:
-        print(f"例外発生 ({url}): {e}")
+        print(f"❌ 例外発生 ({url}): {e}")
         return False
 
 # ==========================================
@@ -236,16 +228,10 @@ def check_vacancy(url):
 # ==========================================
 if __name__ == "__main__":
     print("--- 監視ジョブ開始 ---")
-    
     if DISCORD_WEBHOOK_URL:
         print("✅ Discord設定: OK")
     else:
         print("❌ Discord設定: 未設定")
-
-    # テスト時は待ち時間を短く
-    wait_time = random.randint(2, 5)
-    print(f"Wait for {wait_time} sec...")
-    time.sleep(wait_time)
     
     found_any_in_this_run = False
     
@@ -254,7 +240,7 @@ if __name__ == "__main__":
         is_found = check_vacancy(url)
         if is_found:
             found_any_in_this_run = True
-        time.sleep(2) # 連続アクセスしすぎないよう待機
+        time.sleep(2) # サーバー負荷軽減
 
     now_utc = datetime.datetime.now(datetime.timezone.utc)
     if now_utc.hour == 14 and now_utc.minute >= 25:
