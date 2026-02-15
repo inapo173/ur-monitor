@@ -58,12 +58,10 @@ TARGET_URLS = [
     # アーバンライフ西新井
     "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_5320.html",
     
-    # === テスト用（西上尾第二） ===
-    "https://www.ur-net.go.jp/chintai/kanto/saitama/50_1270.html"
 ]
 
 # ★★★ テスト用：30万円（運用開始時は85000に戻してください） ★★★
-MAX_RENT_LIMIT = 300000
+MAX_RENT_LIMIT = 85000
 
 # 設定
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
