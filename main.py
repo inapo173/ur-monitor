@@ -12,8 +12,7 @@ import sys
 # ==========================================
 
 # 監視したい物件のURLリスト
-# ★ここには「普通のURL」を入れてください。
-# プログラムが自動でデータのあるページ(_room.html)を探しに行きます。
+# ★普通のURL(.html)を入れておけば、自動で裏ルートを探しに行きます
 TARGET_URLS = [
     # 福住一丁目
     "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_2660.html",
@@ -64,7 +63,7 @@ TARGET_URLS = [
     "https://www.ur-net.go.jp/chintai/kanto/saitama/50_1270.html"
 ]
 
-# ★★★ テスト用（30万円） ★★★ 通知が来たら 85000 に戻してください
+# ★★★ テスト中（30万） ★★★ 通知が来たら 85000 に戻してください
 MAX_RENT_LIMIT = 300000
 
 # GitHub Secretsから読み込む
@@ -85,39 +84,40 @@ def send_discord(message):
     except Exception as e:
         print(f"送信エラー: {e}")
 
-def get_room_url(url):
-    """
-    普通のURL(.html)を、データが入っているURL(_room.html)に変換する
-    """
-    if "_room.html" in url:
-        return url
-    return url.replace(".html", "_room.html")
-
 def extract_room_details(soup):
+    """
+    HTMLの中から部屋情報を探し出す関数
+    """
     rooms = []
-    
-    # 【重要】提供されたHTML解析の結果、
-    # 部屋リストは必ず <tbody class="rep_room"> の中にあることが判明しました。
-    # 逆に、ここ以外にある「円」はただの目安（紹介文）なので無視します。
-    
-    table_body = soup.find("tbody", class_="rep_room")
-    
-    if not table_body:
-        # _room.htmlを見に行ってもここが空なら、本当に空室がない
-        return []
+    candidates = soup.find_all(['tr', 'div', 'li', 'dd'])
+    seen_identifiers = set()
 
-    # 部屋リストの各行（tr）を取得
-    rows = table_body.find_all("tr")
-    
-    for row in rows:
-        text = row.get_text()
+    for element in candidates:
+        text = element.get_text()
         clean_text = re.sub(r'\s+', ' ', text).strip()
         
-        # 家賃を抽出
+        # 1. 家賃の「幅（～）」がある行は無視（目安家賃を除外）
+        if "〜" in clean_text or "～" in clean_text or "range" in clean_text:
+            continue
+
+        # 2. 「号室」がない行は無視
+        if "号室" not in clean_text:
+            continue
+
+        # 3. 「円」がない行は無視
+        if "円" not in clean_text:
+            continue
+
+        # データ抽出
         rent_match = re.search(r'([0-9,]+)\s?円', clean_text)
+        room_num_match = re.search(r'([0-9\-]+号棟[0-9]+号室|[0-9]+号室)', clean_text)
         
-        if rent_match:
-            # カンマを除去して数値化
+        if rent_match and room_num_match:
+            room_number = room_num_match.group(1)
+            
+            if room_number in seen_identifiers:
+                continue
+            
             rent_str = rent_match.group(1).replace(",", "")
             try:
                 rent = int(rent_str)
@@ -128,84 +128,101 @@ def extract_room_details(soup):
             if rent > MAX_RENT_LIMIT:
                 continue
             
-            # その他の情報を抽出
-            # 部屋番号（例：1-35号棟405号室）
-            room_num_match = re.search(r'([0-9\-]+号棟[0-9]+号室|[0-9]+号室)', clean_text)
-            room_number = room_num_match.group(1) if room_num_match else "部屋番号不明"
-            
-            # 広さ
             size_match = re.search(r'([0-9]+)\s?(㎡|m2)', clean_text)
-            
-            # 階数
             floor_match = re.search(r'([0-9]+)\s?階', clean_text)
-            
-            # タイプ（1LDKなど）
             type_match = re.search(r'[0-9]?[LDKSR]+', clean_text)
 
             room_info = {
                 "number": room_number,
                 "rent_fmt": rent_match.group(0),
-                "size": size_match.group(0) if size_match else "-",
-                "floor": floor_match.group(0) if floor_match else "-",
+                "size": size_match.group(0) if size_match else "不明",
+                "floor": floor_match.group(0) if floor_match else "不明",
                 "type": type_match.group(0) if type_match else "-"
             }
             rooms.append(room_info)
+            seen_identifiers.add(room_number)
 
     return rooms
 
-def check_vacancy(original_url):
-    # 【重要】データが入っている "_room.html" に変換してアクセスする
-    target_url = get_room_url(original_url)
-    
-    # ブラウザのふりをする（これがないと _room.html がエラーになることがある）
+def get_ajax_url(soup, original_url):
+    """
+    HTML内の秘密の暗号（initSearch）を見つけて、裏APIのURLを作る
+    """
+    scripts = soup.find_all("script")
+    for script in scripts:
+        if script.string and "initSearch" in script.string:
+            # initSearch('50', '127', '0') のような数字を探す
+            match = re.search(r"initSearch\('(\d+)',\s*'(\d+)',\s*'(\d+)'\)", script.string)
+            if match:
+                shisya = match.group(1) # 例: 50
+                danchi = match.group(2) # 例: 127
+                shubetsu = match.group(3) # 例: 0
+                
+                # URの裏API（データのありか）のURLを作成
+                # パターン: /chintai/api/bukken/detail/dtl_50_127_0.html
+                api_url = f"https://www.ur-net.go.jp/chintai/api/bukken/detail/dtl_{shisya}_{danchi}_{shubetsu}.html"
+                print(f"   (裏APIを発見: {api_url})")
+                return api_url
+    return None
+
+def check_vacancy(url):
     user_agents = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     ]
     headers = {
         "User-Agent": random.choice(user_agents),
-        "Referer": original_url  # 元のページから来たふりをする
+        "Referer": "https://www.ur-net.go.jp/"
     }
     
     try:
-        response = requests.get(target_url, headers=headers, timeout=30)
-        
-        # 文字化け対策
+        # 1. まず普通のURLにアクセス
+        response = requests.get(url, headers=headers, timeout=30)
         if response.encoding is None or response.encoding == 'ISO-8859-1':
             response.encoding = response.apparent_encoding
 
-        # 404エラー（ページなし）は、URの場合「部屋がゼロでページが消された」可能性が高い
-        if response.status_code == 404:
-            print(f"→ 空きなし (ページ消失/404): {target_url}")
-            return False
-            
         if response.status_code != 200:
-            print(f"⚠ アクセスエラー ({response.status_code}): {target_url}")
+            print(f"⚠ アクセス失敗 ({response.status_code}): {url}")
             return False
 
         soup = BeautifulSoup(response.content, "html.parser")
         page_text = soup.get_text()
 
-        # 満室・終了の判定
+        # 2. 満室チェック（お辞儀画面）
         if "掲載は終了いたしました" in page_text or "お探しのページは見つかりません" in page_text:
-            print(f"→ 満室 (掲載終了画面): {target_url}")
+            print(f"→ 満室 (掲載終了画面): {url}")
             return False
 
-        if "条件に一致する物件はありませんでした" in page_text or "現在、空き室はありません" in page_text:
-            print(f"→ 空きなし: {target_url}")
-            return False
-
-        # データ抽出
+        # 3. まずはこのページから部屋を探す
         rooms = extract_room_details(soup)
         
+        # 4. もし部屋が見つからなければ、裏API（隠しページ）を探しに行く
         if not rooms:
-            print(f"→ 条件に合う空き部屋なし（または予算オーバー）: {target_url}")
+            # "initSearch" という暗号を探して、裏URLを作る
+            api_url = get_ajax_url(soup, url)
+            
+            if api_url:
+                # 裏APIにアクセス
+                try:
+                    time.sleep(1) # 優しくアクセス
+                    api_response = requests.get(api_url, headers=headers, timeout=30)
+                    api_response.encoding = 'utf-8' # APIはだいたいUTF-8
+                    
+                    if api_response.status_code == 200:
+                        api_soup = BeautifulSoup(api_response.content, "html.parser")
+                        # 裏ページからもう一度部屋を探す
+                        rooms = extract_room_details(api_soup)
+                except Exception as e:
+                    print(f"   (裏APIアクセスエラー: {e})")
+
+        # 5. 結果判定
+        if not rooms:
+            print(f"→ 条件に合う空き部屋なし（または予算オーバー）: {url}")
             return False
 
-        # 通知メッセージ作成
         title = soup.find("h1")
         area_name = title.get_text(strip=True) if title else "不明な団地"
         
-        msg = f"**【UR空室発見！】**\nTarget: {area_name}\nURL: {target_url}\n\n"
+        msg = f"**【UR空室発見！】**\nTarget: {area_name}\nURL: {url}\n\n"
         for i, room in enumerate(rooms):
             if i >= 5:
                 msg += "ほか複数件あり...\n"
@@ -216,7 +233,7 @@ def check_vacancy(original_url):
         return True
 
     except Exception as e:
-        print(f"例外発生 ({target_url}): {e}")
+        print(f"例外発生 ({url}): {e}")
         return False
 
 # ==========================================
