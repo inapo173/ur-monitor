@@ -6,13 +6,13 @@ import re
 import datetime
 import random
 import sys
+import json
 
 # ==========================================
 # 1. ユーザー設定エリア
 # ==========================================
 
-# 監視したい物件のURLリスト
-# ★普通のURL(.html)を入れておけば、自動で裏ルートを探しに行きます
+# 監視したい物件のURLリスト（普通の.htmlのURLでOK）
 TARGET_URLS = [
     # 福住一丁目
     "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_2660.html",
@@ -63,12 +63,15 @@ TARGET_URLS = [
     "https://www.ur-net.go.jp/chintai/kanto/saitama/50_1270.html"
 ]
 
-# ★★★ テスト中（30万） ★★★ 通知が来たら 85000 に戻してください
+# ★★★ テスト用：30万円（成功したら85000に戻してください） ★★★
 MAX_RENT_LIMIT = 300000
 
 # GitHub Secretsから読み込む
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 HEALTHCHECK_URL = os.environ.get("HEALTHCHECK_URL", "")
+
+# APIのエンドポイント（ここが情報の宝庫）
+API_ENDPOINT = "https://www.ur-net.go.jp/chintai/api/bukken/detail/detail_bukken_room/"
 
 # ==========================================
 # 2. システム関数群
@@ -84,86 +87,55 @@ def send_discord(message):
     except Exception as e:
         print(f"送信エラー: {e}")
 
-def extract_room_details(soup):
+def get_identifiers(html_text):
     """
-    HTMLの中から部屋情報を探し出す関数
+    HTMLの中から、APIを叩くために必要な「3つのID」を探し出す
+    initSearch('50', '127', '0') のような記述を探す
     """
-    rooms = []
-    candidates = soup.find_all(['tr', 'div', 'li', 'dd'])
-    seen_identifiers = set()
-
-    for element in candidates:
-        text = element.get_text()
-        clean_text = re.sub(r'\s+', ' ', text).strip()
-        
-        # 1. 家賃の「幅（～）」がある行は無視（目安家賃を除外）
-        if "〜" in clean_text or "～" in clean_text or "range" in clean_text:
-            continue
-
-        # 2. 「号室」がない行は無視
-        if "号室" not in clean_text:
-            continue
-
-        # 3. 「円」がない行は無視
-        if "円" not in clean_text:
-            continue
-
-        # データ抽出
-        rent_match = re.search(r'([0-9,]+)\s?円', clean_text)
-        room_num_match = re.search(r'([0-9\-]+号棟[0-9]+号室|[0-9]+号室)', clean_text)
-        
-        if rent_match and room_num_match:
-            room_number = room_num_match.group(1)
-            
-            if room_number in seen_identifiers:
-                continue
-            
-            rent_str = rent_match.group(1).replace(",", "")
-            try:
-                rent = int(rent_str)
-            except:
-                continue
-            
-            # 家賃フィルター
-            if rent > MAX_RENT_LIMIT:
-                continue
-            
-            size_match = re.search(r'([0-9]+)\s?(㎡|m2)', clean_text)
-            floor_match = re.search(r'([0-9]+)\s?階', clean_text)
-            type_match = re.search(r'[0-9]?[LDKSR]+', clean_text)
-
-            room_info = {
-                "number": room_number,
-                "rent_fmt": rent_match.group(0),
-                "size": size_match.group(0) if size_match else "不明",
-                "floor": floor_match.group(0) if floor_match else "不明",
-                "type": type_match.group(0) if type_match else "-"
-            }
-            rooms.append(room_info)
-            seen_identifiers.add(room_number)
-
-    return rooms
-
-def get_ajax_url(soup, original_url):
-    """
-    HTML内の秘密の暗号（initSearch）を見つけて、裏APIのURLを作る
-    """
-    scripts = soup.find_all("script")
-    for script in scripts:
-        if script.string and "initSearch" in script.string:
-            # initSearch('50', '127', '0') のような数字を探す
-            match = re.search(r"initSearch\('(\d+)',\s*'(\d+)',\s*'(\d+)'\)", script.string)
-            if match:
-                shisya = match.group(1) # 例: 50
-                danchi = match.group(2) # 例: 127
-                shubetsu = match.group(3) # 例: 0
-                
-                # URの裏API（データのありか）のURLを作成
-                # パターン: /chintai/api/bukken/detail/dtl_50_127_0.html
-                api_url = f"https://www.ur-net.go.jp/chintai/api/bukken/detail/dtl_{shisya}_{danchi}_{shubetsu}.html"
-                print(f"   (裏APIを発見: {api_url})")
-                return api_url
+    match = re.search(r"initSearch\('(\d+)',\s*'(\d+)',\s*'(\d+)'\)", html_text)
+    if match:
+        return {
+            "shisya": match.group(1),
+            "danchi": match.group(2),
+            "shikibetu": match.group(3)
+        }
     return None
+
+def fetch_room_data_via_api(identifiers, original_url):
+    """
+    IDを使って裏APIからJSONデータを取得する
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": original_url,
+        "X-Requested-With": "XMLHttpRequest",
+        "Origin": "https://www.ur-net.go.jp"
+    }
+    
+    # APIに送るデータ（これが「鍵」です）
+    payload = {
+        "shisya": identifiers["shisya"],
+        "danchi": identifiers["danchi"],
+        "shikibetu": identifiers["shikibetu"],
+        "siteId": "chintai" # おそらく固定
+    }
+    
+    try:
+        response = requests.post(API_ENDPOINT, data=payload, headers=headers, timeout=30)
+        
+        if response.status_code == 200:
+            try:
+                return response.json() # JSONとして読み込む
+            except json.JSONDecodeError:
+                print(f"⚠ API応答がJSONではありませんでした: {original_url}")
+                return None
+        else:
+            print(f"⚠ APIアクセスエラー ({response.status_code}): {original_url}")
+            return None
+            
+    except Exception as e:
+        print(f"⚠ API通信例外: {e}")
+        return None
 
 def check_vacancy(url):
     user_agents = [
@@ -175,59 +147,75 @@ def check_vacancy(url):
     }
     
     try:
-        # 1. まず普通のURLにアクセス
+        # 1. まずHTMLページにアクセスしてIDを取得する
         response = requests.get(url, headers=headers, timeout=30)
-        if response.encoding is None or response.encoding == 'ISO-8859-1':
-            response.encoding = response.apparent_encoding
-
-        if response.status_code != 200:
-            print(f"⚠ アクセス失敗 ({response.status_code}): {url}")
-            return False
-
-        soup = BeautifulSoup(response.content, "html.parser")
-        page_text = soup.get_text()
-
-        # 2. 満室チェック（お辞儀画面）
-        if "掲載は終了いたしました" in page_text or "お探しのページは見つかりません" in page_text:
-            print(f"→ 満室 (掲載終了画面): {url}")
-            return False
-
-        # 3. まずはこのページから部屋を探す
-        rooms = extract_room_details(soup)
         
-        # 4. もし部屋が見つからなければ、裏API（隠しページ）を探しに行く
-        if not rooms:
-            # "initSearch" という暗号を探して、裏URLを作る
-            api_url = get_ajax_url(soup, url)
+        if response.status_code == 404:
+            print(f"→ ページなし (404): {url}")
+            return False
+        
+        # ID抽出
+        identifiers = get_identifiers(response.text)
+        if not identifiers:
+            # IDが見つからない＝部屋データを持つページではない（または構造が変わった）
+            print(f"→ ID抽出失敗（initSearchが見つかりません）: {url}")
+            return False
             
-            if api_url:
-                # 裏APIにアクセス
-                try:
-                    time.sleep(1) # 優しくアクセス
-                    api_response = requests.get(api_url, headers=headers, timeout=30)
-                    api_response.encoding = 'utf-8' # APIはだいたいUTF-8
-                    
-                    if api_response.status_code == 200:
-                        api_soup = BeautifulSoup(api_response.content, "html.parser")
-                        # 裏ページからもう一度部屋を探す
-                        rooms = extract_room_details(api_soup)
-                except Exception as e:
-                    print(f"   (裏APIアクセスエラー: {e})")
+        # 2. 抽出したIDを使ってAPIを叩く
+        print(f"   (API問い合わせ中... {identifiers['shisya']}-{identifiers['danchi']}-{identifiers['shikibetu']})")
+        json_data = fetch_room_data_via_api(identifiers, url)
+        
+        if not json_data:
+            print(f"→ データ取得失敗（APIエラーまたは空）: {url}")
+            return False
+            
+        # 3. JSONデータを解析して部屋を探す
+        valid_rooms = []
+        
+        # JSONはリスト形式で返ってくる [ {room1}, {room2}... ]
+        for room in json_data:
+            # 必要な情報を辞書から取り出す
+            rent_str = room.get("rent", "0").replace("円", "").replace(",", "")
+            room_name = room.get("name", "不明")
+            room_type = room.get("type", "-")
+            floor_space = room.get("floorspace", "-") # &#13217;などが含まれるかも
+            floor_num = room.get("floor", "-")
+            
+            try:
+                rent = int(rent_str)
+            except:
+                continue # 家賃が数値にできないデータは無視
+                
+            # 家賃フィルター
+            if rent > MAX_RENT_LIMIT:
+                continue
+                
+            # HTML特殊文字のクリーニング
+            floor_space = floor_space.replace("&#13217;", "㎡")
+            
+            valid_rooms.append({
+                "name": room_name,
+                "rent_fmt": room.get("rent", ""),
+                "type": room_type,
+                "size": floor_space,
+                "floor": floor_num
+            })
 
-        # 5. 結果判定
-        if not rooms:
-            print(f"→ 条件に合う空き部屋なし（または予算オーバー）: {url}")
+        if not valid_rooms:
+            print(f"→ 条件に合う空き部屋なし（API応答あり・予算オーバーなど）: {url}")
             return False
 
+        # 4. 通知送信
+        soup = BeautifulSoup(response.content, "html.parser")
         title = soup.find("h1")
         area_name = title.get_text(strip=True) if title else "不明な団地"
         
         msg = f"**【UR空室発見！】**\nTarget: {area_name}\nURL: {url}\n\n"
-        for i, room in enumerate(rooms):
+        for i, r in enumerate(valid_rooms):
             if i >= 5:
                 msg += "ほか複数件あり...\n"
                 break
-            msg += f"・{room['number']} | {room['type']} | {room['floor']} | **{room['rent_fmt']}**\n"
+            msg += f"・{r['name']} | {r['type']} | {r['floor']} | **{r['rent_fmt']}**\n"
         
         send_discord(msg)
         return True
